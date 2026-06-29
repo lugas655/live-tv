@@ -13,11 +13,10 @@ const VPS_PROXY_URL  = import.meta.env.VITE_VPS_PROXY_URL  || '';
 
 const PROXY_CHAIN = isCapacitor ? [] : [
   {
-    label: 'Local Proxy',
-    // Di dev pakai Vite middleware; di preview/prod pakai node proxy.js
-    buildUrl: (u) => import.meta.env.DEV
-      ? `/proxy/${u}`
-      : `http://localhost:3001/proxy/${u}`,
+    // Proxy internal — Di DEV: Vite middleware, Di Docker: Nginx route ke proxy container
+    // Selalu pakai relative URL /proxy/ agar bekerja di semua environment
+    label: 'Proxy Server',
+    buildUrl: (u) => `/proxy/${u}`,
   },
   // VPS Proxy — paling andal jika VITE_VPS_PROXY_URL diisi
   ...(VPS_PROXY_URL ? [{
