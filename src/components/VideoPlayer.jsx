@@ -1,40 +1,44 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import Hls from 'hls.js';
-import { Loader2, ShieldCheck, Zap, Settings, Check, ChevronDown, RefreshCw, WifiOff } from 'lucide-react';
+import { Loader2, ShieldCheck, Zap, Settings, Check, ChevronDown, RefreshCw, WifiOff, Globe } from 'lucide-react';
 
-const isCapacitor = typeof window !== 'undefined' && !!window.Capacitor;
 const LOAD_TIMEOUT_MS = 20000;
 
-// ─── Daftar proxy yang akan dicoba berurutan ───────────────────────────────
-// Setiap entry: { label, buildUrl(targetUrl) }
-// buildUrl: fungsi yang mengubah URL asli → URL via proxy
-const CF_WORKER_URL  = import.meta.env.VITE_CF_WORKER_URL  || '';
-const VPS_PROXY_URL  = import.meta.env.VITE_VPS_PROXY_URL  || '';
-
-const PROXY_CHAIN = isCapacitor ? [] : [
+// ─── Daftar pilihan proxy ──────────────────────────────────────────────────
+const PROXY_OPTIONS = [
   {
-    // Proxy internal — Di DEV: Vite middleware, Di Docker: Nginx route ke proxy container
-    // Selalu pakai relative URL /proxy/ agar bekerja di semua environment
+    id: 'direct',
+    label: 'Direct',
+    desc: 'Tanpa proxy',
+    buildUrl: (u) => u,
+    xhrSetup: null,
+  },
+  {
+    id: 'server',
     label: 'Proxy Server',
+    desc: 'Via VPS / lokal',
     buildUrl: (u) => `/proxy/${u}`,
+    xhrSetup: (xhr, url) => {
+      if (url.startsWith('http')) xhr.open('GET', `/proxy/${url}`, true);
+    },
   },
-  // VPS Proxy — paling andal jika VITE_VPS_PROXY_URL diisi
-  ...(VPS_PROXY_URL ? [{
-    label: 'VPS Proxy',
-    buildUrl: (u) => `${VPS_PROXY_URL}/proxy/${u}`,
-  }] : []),
-  // Cloudflare Worker — diaktifkan jika VITE_CF_WORKER_URL diisi di .env
-  ...(CF_WORKER_URL ? [{
-    label: 'CF Worker',
-    buildUrl: (u) => `${CF_WORKER_URL}/proxy/${u}`,
-  }] : []),
   {
+    id: 'corsproxy',
     label: 'corsproxy.io',
+    desc: 'Public proxy 1',
     buildUrl: (u) => `https://corsproxy.io/?url=${encodeURIComponent(u)}`,
+    xhrSetup: (xhr, url) => {
+      if (url.startsWith('http')) xhr.open('GET', `https://corsproxy.io/?url=${encodeURIComponent(url)}`, true);
+    },
   },
   {
+    id: 'allorigins',
     label: 'allorigins',
+    desc: 'Public proxy 2',
     buildUrl: (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+    xhrSetup: (xhr, url) => {
+      if (url.startsWith('http')) xhr.open('GET', `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`, true);
+    },
   },
 ];
 
@@ -52,42 +56,34 @@ const getResolutionLabel = (level) => {
   return 'Standar';
 };
 
-// ─── Helper: buat xhrSetup untuk HLS.js berdasarkan buildUrl ──────────────
-const makeXhrSetup = (buildUrl) => (xhr, requestUrl) => {
-  if (requestUrl.startsWith('http')) {
-    xhr.open('GET', buildUrl(requestUrl), true);
-  }
-};
-
 export default function VideoPlayer({ url, title }) {
   const videoRef        = useRef(null);
   const hlsRef          = useRef(null);
   const loadingTimerRef = useRef(null);
-  const hasStartedRef   = useRef(false); // true setelah manifest parsed & video mulai play
 
-  // proxyIdx: -1 = direct, 0..N = index ke PROXY_CHAIN
-  const [proxyIdx,       setProxyIdx]       = useState(-1);
-  const [loading,        setLoading]        = useState(false);
-  const [error,          setError]          = useState(null);
-  const [isDash,         setIsDash]         = useState(false);
-  const [retryKey,       setRetryKey]       = useState(0);
+  const [selectedProxy, setSelectedProxy] = useState(PROXY_OPTIONS[0]); // default: Direct
+  const [loading,        setLoading]       = useState(false);
+  const [error,          setError]         = useState(null);
+  const [isDash,         setIsDash]        = useState(false);
+  const [retryKey,       setRetryKey]      = useState(0);
 
-  // Resolusi
-  const [levels,         setLevels]         = useState([]);
-  const [currentLevel,   setCurrentLevel]   = useState(-1);
-  const [showQualityMenu,setShowQualityMenu] = useState(false);
+  // Resolusi / kualitas
+  const [levels,          setLevels]          = useState([]);
+  const [currentLevel,    setCurrentLevel]    = useState(-1);
+  const [showQualityMenu, setShowQualityMenu] = useState(false);
+  const [showProxyMenu,   setShowProxyMenu]   = useState(false);
 
   // Reset saat saluran berubah
   useEffect(() => {
-    setProxyIdx(-1);
     setError(null);
     setLevels([]);
     setCurrentLevel(-1);
     setShowQualityMenu(false);
+    setShowProxyMenu(false);
     setRetryKey(0);
   }, [url]);
 
-  // ── Handlers ──────────────────────────────────────────────────────────────
+  // ── Handlers ─────────────────────────────────────────────────────────────
   const handleRetry = useCallback(() => {
     setError(null);
     setLevels([]);
@@ -95,11 +91,12 @@ export default function VideoPlayer({ url, title }) {
     setRetryKey(k => k + 1);
   }, []);
 
-  const handleRetryDirect = useCallback(() => {
+  const handleSelectProxy = useCallback((proxy) => {
+    setSelectedProxy(proxy);
     setError(null);
     setLevels([]);
     setCurrentLevel(-1);
-    setProxyIdx(-1);
+    setShowProxyMenu(false);
     setRetryKey(k => k + 1);
   }, []);
 
@@ -111,34 +108,13 @@ export default function VideoPlayer({ url, title }) {
     setShowQualityMenu(false);
   }, []);
 
-  // ── Main effect: init player ───────────────────────────────────────────────
+  // ── Main effect: init player ──────────────────────────────────────────────
   useEffect(() => {
     let hls;
     let dashPlayer;
     const video = videoRef.current;
     let cancelled = false;
-    hasStartedRef.current = false;
-
-    const currentProxy = proxyIdx >= 0 ? PROXY_CHAIN[proxyIdx] : null;
-
-    // Fungsi: coba proxy berikutnya, atau tampilkan error jika sudah habis
-    const tryNextProxy = (reason) => {
-      const next = proxyIdx + 1;
-      if (!isCapacitor && next < PROXY_CHAIN.length) {
-        console.log(`[VideoPlayer] ${reason} → Mencoba proxy #${next}: ${PROXY_CHAIN[next].label}`);
-        clearTimeout(loadingTimerRef.current);
-        if (!cancelled) setProxyIdx(next);
-      } else {
-        const finalMsg = isCapacitor
-          ? 'Waktu habis memuat tayangan. Server mungkin sedang mati.'
-          : `Semua jalur gagal. Stream mungkin geo-block atau server mati.\n(Direct → ${PROXY_CHAIN.map(p => p.label).join(' → ')})`;
-        clearTimeout(loadingTimerRef.current);
-        if (!cancelled) {
-          setError(finalMsg);
-          setLoading(false);
-        }
-      }
-    };
+    const proxy = selectedProxy;
 
     const init = async () => {
       setError(null);
@@ -149,16 +125,16 @@ export default function VideoPlayer({ url, title }) {
       const checkIsDash = url.includes('.mpd');
       setIsDash(checkIsDash);
 
-      // Timeout global
       clearTimeout(loadingTimerRef.current);
       loadingTimerRef.current = setTimeout(() => {
-        // Jika sudah berhasil play, timeout tidak relevan
-        if (!cancelled && !hasStartedRef.current) tryNextProxy('Timeout');
+        if (!cancelled) {
+          setError('Waktu habis memuat tayangan. Coba proxy lain.');
+          setLoading(false);
+        }
       }, LOAD_TIMEOUT_MS);
 
       const onReady = () => {
         clearTimeout(loadingTimerRef.current);
-        hasStartedRef.current = true;
         if (!cancelled) setLoading(false);
       };
       const onFail = (msg) => {
@@ -171,40 +147,34 @@ export default function VideoPlayer({ url, title }) {
         try {
           const dashjs = await import('dashjs');
           const MediaPlayer = dashjs.default?.MediaPlayer || dashjs.MediaPlayer;
-          if (!MediaPlayer) throw new Error('dashjs MediaPlayer tidak tersedia');
-
-          const dashUrl = currentProxy ? currentProxy.buildUrl(url) : url;
+          if (!MediaPlayer) throw new Error('dashjs tidak tersedia');
           dashPlayer = MediaPlayer().create();
-          dashPlayer.initialize(video, dashUrl, true);
-
-          const events = (dashjs.default?.MediaPlayer?.events || dashjs.MediaPlayer?.events);
+          dashPlayer.initialize(video, proxy.buildUrl(url), true);
+          const events = dashjs.default?.MediaPlayer?.events || dashjs.MediaPlayer?.events;
           dashPlayer.on(events.PLAYBACK_PLAYING, onReady);
           dashPlayer.on(events.STREAM_INITIALIZED, onReady);
-
           dashPlayer.on(events.ERROR, () => {
             dashPlayer?.destroy(); dashPlayer = null;
-            tryNextProxy('DASH error');
+            onFail('Gagal memutar DASH. Coba proxy lain.');
           });
         } catch (e) {
-          console.error('DASH init error:', e);
-          onFail('Gagal memuat pemutar DASH. Coba saluran HLS saja.');
+          onFail('Gagal memuat pemutar DASH.');
         }
         return;
       }
 
-      // ── HLS via HLS.js ────────────────────────────────────────────────────
+      // ── HLS ───────────────────────────────────────────────────────────────
       if (Hls.isSupported()) {
         const hlsConfig = {
           debug: false,
           enableWorker: true,
           lowLatencyMode: true,
-          // Jika pakai proxy, semua request (manifest + segment) ikut di-proxy
-          ...(currentProxy && { xhrSetup: makeXhrSetup(currentProxy.buildUrl) }),
+          ...(proxy.xhrSetup && { xhrSetup: proxy.xhrSetup }),
         };
 
         hls = new Hls(hlsConfig);
         hlsRef.current = hls;
-        hls.loadSource(currentProxy ? currentProxy.buildUrl(url) : url);
+        hls.loadSource(proxy.buildUrl(url));
         hls.attachMedia(video);
 
         hls.on(Hls.Events.MANIFEST_PARSED, (_, data) => {
@@ -217,44 +187,26 @@ export default function VideoPlayer({ url, title }) {
         });
 
         hls.on(Hls.Events.ERROR, (_, data) => {
-          if (!data.fatal) {
-            // Non-fatal: biarkan HLS.js recover sendiri
-            console.warn('[HLS] non-fatal:', data.type, data.details);
-            return;
-          }
+          if (!data.fatal) return;
           console.error('[HLS] fatal:', data.type, data.details);
 
           if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-            // Media error → coba recover dulu sebelum menyerah
-            console.warn('[HLS] Fatal Media Error — mencoba recoverMediaError...');
             hls.recoverMediaError();
             return;
           }
 
-          // Fatal network error
           hls.destroy(); hls = null; hlsRef.current = null;
-
-          if (hasStartedRef.current && proxyIdx >= 0) {
-            // Sudah main via proxy tapi putus → mungkin server turun
-            onFail('Tayangan terputus. Server sedang gangguan. Coba lagi.');
-          } else {
-            // Belum main ATAU sudah main tapi direct (CORS segment) → coba proxy berikutnya
-            console.log('[HLS] Switching ke proxy berikutnya...');
-            tryNextProxy(`HLS ${data.type}`);
-          }
+          onFail('Tayangan gagal dimuat. Coba pilih proxy lain di bawah video.');
         });
 
         return;
       }
 
-      // ── Native HLS (Safari/iOS) ───────────────────────────────────────────
+      // ── Native HLS (Safari) ───────────────────────────────────────────────
       if (video.canPlayType('application/vnd.apple.mpegurl')) {
-        video.src = currentProxy ? currentProxy.buildUrl(url) : url;
-        video.addEventListener('loadedmetadata', () => {
-          onReady();
-          video.play().catch(() => {});
-        });
-        video.addEventListener('error', () => tryNextProxy('Native video error'));
+        video.src = proxy.buildUrl(url);
+        video.addEventListener('loadedmetadata', () => { onReady(); video.play().catch(() => {}); });
+        video.addEventListener('error', () => onFail('Gagal memutar. Coba proxy lain.'));
         return;
       }
 
@@ -269,26 +221,54 @@ export default function VideoPlayer({ url, title }) {
       if (hls) { hls.destroy(); hlsRef.current = null; }
       if (dashPlayer) dashPlayer.destroy();
       if (video) video.src = '';
-      hasStartedRef.current = false;
     };
-  }, [url, proxyIdx, retryKey]);
+  }, [url, selectedProxy, retryKey]);
 
   // ─── UI helpers ──────────────────────────────────────────────────────────
-  const activeLabel   = currentLevel === -1 ? 'Auto' : getResolutionLabel(levels[currentLevel]);
-  const sortedLevels  = [...levels]
+  const activeLabel  = currentLevel === -1 ? 'Auto' : getResolutionLabel(levels[currentLevel]);
+  const sortedLevels = [...levels]
     .map((lvl, idx) => ({ ...lvl, index: idx }))
     .sort((a, b) => (b.height || b.bitrate || 0) - (a.height || a.bitrate || 0));
 
-  const currentProxyLabel = proxyIdx >= 0 ? PROXY_CHAIN[proxyIdx]?.label : null;
+  const btnStyle = (active) => ({
+    display: 'flex', alignItems: 'center', gap: '6px',
+    padding: '6px 12px', borderRadius: '9999px',
+    background: active ? 'rgba(250,189,0,0.2)' : 'rgba(0,0,0,0.75)',
+    border: active ? '1px solid rgba(250,189,0,0.4)' : '1px solid rgba(255,255,255,0.15)',
+    color: active ? '#fac500' : '#e2e8f0',
+    fontSize: '12px', fontWeight: '600',
+    cursor: 'pointer', backdropFilter: 'blur(8px)',
+    transition: 'all 0.2s', letterSpacing: '0.03em',
+  });
 
-  // Loading message berdasarkan proxy yang aktif
-  const loadingMsg = proxyIdx === -1
-    ? 'Memuat Tayangan...'
-    : `Mencoba via ${currentProxyLabel}...`;
+  const menuStyle = {
+    position: 'absolute', bottom: '110%', right: 0,
+    minWidth: '180px', background: 'rgba(15,23,42,0.97)',
+    border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px',
+    overflow: 'hidden', boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
+    backdropFilter: 'blur(14px)',
+  };
+
+  const menuHeaderStyle = {
+    padding: '10px 14px 6px', fontSize: '10px', fontWeight: '700',
+    letterSpacing: '0.08em', color: '#64748b', textTransform: 'uppercase',
+    borderBottom: '1px solid rgba(255,255,255,0.06)',
+  };
+
+  const menuItemStyle = (isActive) => ({
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    width: '100%', padding: '9px 14px',
+    background: isActive ? 'rgba(250,189,0,0.12)' : 'transparent',
+    border: 'none', color: isActive ? '#fac500' : '#cbd5e1',
+    fontSize: '13px', fontWeight: isActive ? '700' : '400',
+    cursor: 'pointer', textAlign: 'left', transition: 'background 0.15s',
+  });
 
   return (
-    <div className="w-full h-full bg-black rounded-xl overflow-hidden shadow-2xl border border-slate-800 relative group flex items-center justify-center">
-
+    <div
+      className="w-full h-full bg-black rounded-xl overflow-hidden shadow-2xl border border-slate-800 relative group flex items-center justify-center"
+      onClick={() => { setShowQualityMenu(false); setShowProxyMenu(false); }}
+    >
       {/* ── Top overlay: judul + badge ── */}
       <div className="absolute top-0 left-0 w-full p-4 bg-gradient-to-b from-black/80 to-transparent z-30 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none flex justify-between items-center">
         <h2 className="text-white text-lg font-semibold drop-shadow-md">{title || 'Pilih Saluran'}</h2>
@@ -298,100 +278,105 @@ export default function VideoPlayer({ url, title }) {
               <Zap className="w-4 h-4" /> DASH
             </div>
           )}
-          {currentProxyLabel && !error && (
+          {selectedProxy.id !== 'direct' && !error && !loading && (
             <div className="flex items-center gap-1 bg-emerald-500/20 text-emerald-400 px-3 py-1 rounded-full text-xs border border-emerald-500/30">
-              <ShieldCheck className="w-4 h-4" /> {currentProxyLabel}
+              <ShieldCheck className="w-4 h-4" /> {selectedProxy.label}
             </div>
           )}
         </div>
       </div>
 
-      {/* ── Tombol Kualitas ── */}
-      {levels.length > 1 && !error && !loading && (
-        <div className="absolute bottom-14 right-4 z-40">
-          <button
-            onClick={() => setShowQualityMenu(prev => !prev)}
-            title="Pilih Kualitas / Resolusi"
-            style={{
-              display: 'flex', alignItems: 'center', gap: '6px',
-              padding: '6px 12px', borderRadius: '9999px',
-              background: 'rgba(0,0,0,0.75)', border: '1px solid rgba(255,255,255,0.15)',
-              color: '#e2e8f0', fontSize: '12px', fontWeight: '600',
-              cursor: 'pointer', backdropFilter: 'blur(8px)',
-              transition: 'all 0.2s', letterSpacing: '0.03em',
-            }}
-          >
-            <Settings style={{ width: '14px', height: '14px' }} />
-            {activeLabel}
-            <ChevronDown style={{
-              width: '12px', height: '12px', transition: 'transform 0.2s',
-              transform: showQualityMenu ? 'rotate(180deg)' : 'rotate(0deg)',
-            }} />
-          </button>
+      {/* ── Bottom controls: Proxy + Kualitas ── */}
+      {!error && !loading && url && (
+        <div
+          className="absolute bottom-14 left-0 right-0 px-4 z-40 flex justify-between items-end"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* Tombol Proxy */}
+          <div style={{ position: 'relative' }}>
+            <button
+              onClick={() => { setShowProxyMenu(p => !p); setShowQualityMenu(false); }}
+              style={btnStyle(selectedProxy.id !== 'direct')}
+              title="Pilih Proxy"
+            >
+              <Globe style={{ width: '14px', height: '14px' }} />
+              {selectedProxy.label}
+              <ChevronDown style={{ width: '12px', height: '12px', transition: 'transform 0.2s', transform: showProxyMenu ? 'rotate(180deg)' : 'rotate(0deg)' }} />
+            </button>
 
-          {showQualityMenu && (
-            <div style={{
-              position: 'absolute', bottom: '110%', right: 0,
-              minWidth: '170px', background: 'rgba(15,23,42,0.97)',
-              border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px',
-              overflow: 'hidden', boxShadow: '0 8px 32px rgba(0,0,0,0.6)',
-              backdropFilter: 'blur(14px)',
-            }}>
-              <div style={{
-                padding: '10px 14px 6px', fontSize: '10px', fontWeight: '700',
-                letterSpacing: '0.08em', color: '#64748b', textTransform: 'uppercase',
-                borderBottom: '1px solid rgba(255,255,255,0.06)',
-              }}>
-                Kualitas Video
+            {showProxyMenu && (
+              <div style={{ ...menuStyle, left: 0, right: 'auto' }}>
+                <div style={menuHeaderStyle}>Pilih Proxy</div>
+                {PROXY_OPTIONS.map((opt) => {
+                  const isActive = selectedProxy.id === opt.id;
+                  return (
+                    <button
+                      key={opt.id}
+                      onClick={() => handleSelectProxy(opt)}
+                      style={menuItemStyle(isActive)}
+                      onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = 'rgba(255,255,255,0.05)'; }}
+                      onMouseLeave={e => { if (!isActive) e.currentTarget.style.background = 'transparent'; }}
+                    >
+                      <span style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
+                        <span>{opt.label}</span>
+                        <span style={{ fontSize: '10px', color: isActive ? '#fac50099' : '#475569', fontWeight: '400' }}>{opt.desc}</span>
+                      </span>
+                      {isActive && <Check style={{ width: '14px', height: '14px', flexShrink: 0 }} />}
+                    </button>
+                  );
+                })}
               </div>
+            )}
+          </div>
 
-              {/* Auto */}
+          {/* Tombol Kualitas (hanya jika ada multi-level) */}
+          {levels.length > 1 && (
+            <div style={{ position: 'relative' }}>
               <button
-                onClick={() => handleQualityChange(-1)}
-                style={{
-                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                  width: '100%', padding: '9px 14px',
-                  background: currentLevel === -1 ? 'rgba(250,189,0,0.12)' : 'transparent',
-                  border: 'none', color: currentLevel === -1 ? '#fac500' : '#cbd5e1',
-                  fontSize: '13px', fontWeight: currentLevel === -1 ? '700' : '400',
-                  cursor: 'pointer', textAlign: 'left',
-                }}
-                onMouseEnter={e => { if (currentLevel !== -1) e.currentTarget.style.background = 'rgba(255,255,255,0.05)'; }}
-                onMouseLeave={e => { if (currentLevel !== -1) e.currentTarget.style.background = 'transparent'; }}
+                onClick={() => { setShowQualityMenu(p => !p); setShowProxyMenu(false); }}
+                style={btnStyle(false)}
+                title="Pilih Kualitas"
               >
-                <span>⚡ Auto (Adaptif)</span>
-                {currentLevel === -1 && <Check style={{ width: '14px', height: '14px' }} />}
+                <Settings style={{ width: '14px', height: '14px' }} />
+                {activeLabel}
+                <ChevronDown style={{ width: '12px', height: '12px', transition: 'transform 0.2s', transform: showQualityMenu ? 'rotate(180deg)' : 'rotate(0deg)' }} />
               </button>
 
-              <div style={{ height: '1px', background: 'rgba(255,255,255,0.06)' }} />
-
-              {sortedLevels.map((lvl) => {
-                const label    = getResolutionLabel(lvl);
-                const isActive = currentLevel === lvl.index;
-                const kbps     = lvl.bitrate ? Math.round(lvl.bitrate / 1000) : null;
-                return (
+              {showQualityMenu && (
+                <div style={menuStyle}>
+                  <div style={menuHeaderStyle}>Kualitas Video</div>
                   <button
-                    key={lvl.index}
-                    onClick={() => handleQualityChange(lvl.index)}
-                    style={{
-                      display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                      width: '100%', padding: '9px 14px',
-                      background: isActive ? 'rgba(250,189,0,0.12)' : 'transparent',
-                      border: 'none', color: isActive ? '#fac500' : '#cbd5e1',
-                      fontSize: '13px', fontWeight: isActive ? '700' : '400',
-                      cursor: 'pointer', textAlign: 'left',
-                    }}
-                    onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = 'rgba(255,255,255,0.05)'; }}
-                    onMouseLeave={e => { if (!isActive) e.currentTarget.style.background = 'transparent'; }}
+                    onClick={() => handleQualityChange(-1)}
+                    style={menuItemStyle(currentLevel === -1)}
+                    onMouseEnter={e => { if (currentLevel !== -1) e.currentTarget.style.background = 'rgba(255,255,255,0.05)'; }}
+                    onMouseLeave={e => { if (currentLevel !== -1) e.currentTarget.style.background = 'transparent'; }}
                   >
-                    <span style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
-                      <span>{label}</span>
-                      {kbps && <span style={{ fontSize: '10px', color: isActive ? '#fac50099' : '#475569', fontWeight: '400' }}>~{kbps} kbps</span>}
-                    </span>
-                    {isActive && <Check style={{ width: '14px', height: '14px', flexShrink: 0 }} />}
+                    <span>⚡ Auto (Adaptif)</span>
+                    {currentLevel === -1 && <Check style={{ width: '14px', height: '14px' }} />}
                   </button>
-                );
-              })}
+                  <div style={{ height: '1px', background: 'rgba(255,255,255,0.06)' }} />
+                  {sortedLevels.map((lvl) => {
+                    const label    = getResolutionLabel(lvl);
+                    const isActive = currentLevel === lvl.index;
+                    const kbps     = lvl.bitrate ? Math.round(lvl.bitrate / 1000) : null;
+                    return (
+                      <button
+                        key={lvl.index}
+                        onClick={() => handleQualityChange(lvl.index)}
+                        style={menuItemStyle(isActive)}
+                        onMouseEnter={e => { if (!isActive) e.currentTarget.style.background = 'rgba(255,255,255,0.05)'; }}
+                        onMouseLeave={e => { if (!isActive) e.currentTarget.style.background = 'transparent'; }}
+                      >
+                        <span style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
+                          <span>{label}</span>
+                          {kbps && <span style={{ fontSize: '10px', color: isActive ? '#fac50099' : '#475569', fontWeight: '400' }}>~{kbps} kbps</span>}
+                        </span>
+                        {isActive && <Check style={{ width: '14px', height: '14px', flexShrink: 0 }} />}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -411,11 +396,9 @@ export default function VideoPlayer({ url, title }) {
       {loading && !error && url && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 z-20">
           <Loader2 className="w-12 h-12 text-worldcup-gold animate-spin mb-4" />
-          <p className="text-slate-300 font-medium">{loadingMsg}</p>
-          {proxyIdx >= 0 && (
-            <p className="text-slate-500 text-xs mt-2">
-              Jalur {proxyIdx + 1}/{PROXY_CHAIN.length}: {currentProxyLabel}
-            </p>
+          <p className="text-slate-300 font-medium">Memuat tayangan...</p>
+          {selectedProxy.id !== 'direct' && (
+            <p className="text-slate-500 text-xs mt-1">via {selectedProxy.label}</p>
           )}
         </div>
       )}
@@ -424,53 +407,54 @@ export default function VideoPlayer({ url, title }) {
       {error && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900/95 z-20 p-6 text-center border-t-4 border-red-500">
           <div style={{
-            width: '64px', height: '64px', borderRadius: '50%',
+            width: '60px', height: '60px', borderRadius: '50%',
             background: 'rgba(239,68,68,0.15)', border: '1px solid rgba(239,68,68,0.3)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '16px',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '14px',
           }}>
-            <WifiOff style={{ width: '32px', height: '32px', color: '#ef4444' }} />
+            <WifiOff style={{ width: '28px', height: '28px', color: '#ef4444' }} />
           </div>
-          <p className="text-white text-lg font-bold mb-1">Tayangan Gagal Dimuat</p>
-          <p className="text-slate-400 text-xs max-w-xs mb-6" style={{ lineHeight: '1.6', whiteSpace: 'pre-line' }}>{error}</p>
+          <p className="text-white text-base font-bold mb-1">Tayangan Gagal Dimuat</p>
+          <p className="text-slate-400 text-xs max-w-xs mb-5" style={{ lineHeight: '1.6' }}>{error}</p>
 
-          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', justifyContent: 'center' }}>
-            <button
-              onClick={handleRetry}
-              style={{
-                display: 'flex', alignItems: 'center', gap: '6px',
-                padding: '9px 18px', borderRadius: '9999px',
-                background: 'linear-gradient(135deg, #fac500, #e6b000)',
-                border: 'none', color: '#0f172a',
-                fontSize: '13px', fontWeight: '700', cursor: 'pointer',
-              }}
-              onMouseEnter={e => e.currentTarget.style.opacity = '0.85'}
-              onMouseLeave={e => e.currentTarget.style.opacity = '1'}
-            >
-              <RefreshCw style={{ width: '14px', height: '14px' }} />
-              Coba Lagi
-            </button>
+          {/* Tombol Retry */}
+          <button
+            onClick={handleRetry}
+            style={{
+              display: 'flex', alignItems: 'center', gap: '6px',
+              padding: '9px 20px', borderRadius: '9999px',
+              background: 'linear-gradient(135deg, #fac500, #e6b000)',
+              border: 'none', color: '#0f172a',
+              fontSize: '13px', fontWeight: '700', cursor: 'pointer',
+              marginBottom: '16px',
+            }}
+          >
+            <RefreshCw style={{ width: '14px', height: '14px' }} />
+            Coba Lagi
+          </button>
 
-            {proxyIdx !== -1 && (
-              <button
-                onClick={handleRetryDirect}
-                style={{
-                  display: 'flex', alignItems: 'center', gap: '6px',
-                  padding: '9px 18px', borderRadius: '9999px',
-                  background: 'rgba(255,255,255,0.06)',
-                  border: '1px solid rgba(255,255,255,0.15)',
-                  color: '#94a3b8', fontSize: '13px', fontWeight: '600', cursor: 'pointer',
-                }}
-                onMouseEnter={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.1)'; e.currentTarget.style.color = '#e2e8f0'; }}
-                onMouseLeave={e => { e.currentTarget.style.background = 'rgba(255,255,255,0.06)'; e.currentTarget.style.color = '#94a3b8'; }}
-              >
-                Tanpa Proxy
-              </button>
-            )}
+          {/* Pilihan Proxy langsung di error screen */}
+          <p style={{ fontSize: '11px', color: '#64748b', marginBottom: '8px' }}>Atau coba dengan proxy lain:</p>
+          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', justifyContent: 'center' }}>
+            {PROXY_OPTIONS.map((opt) => {
+              const isActive = selectedProxy.id === opt.id;
+              return (
+                <button
+                  key={opt.id}
+                  onClick={() => handleSelectProxy(opt)}
+                  style={{
+                    padding: '6px 14px', borderRadius: '9999px',
+                    background: isActive ? 'rgba(250,189,0,0.15)' : 'rgba(255,255,255,0.05)',
+                    border: isActive ? '1px solid rgba(250,189,0,0.4)' : '1px solid rgba(255,255,255,0.1)',
+                    color: isActive ? '#fac500' : '#94a3b8',
+                    fontSize: '12px', fontWeight: isActive ? '700' : '400',
+                    cursor: 'pointer', transition: 'all 0.15s',
+                  }}
+                >
+                  {opt.label}
+                </button>
+              );
+            })}
           </div>
-
-          <p style={{ marginTop: '16px', fontSize: '10px', color: '#334155' }}>
-            Sudah mencoba {proxyIdx + 2} jalur • Coba saluran lain
-          </p>
         </div>
       )}
 
