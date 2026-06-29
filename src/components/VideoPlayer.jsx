@@ -61,9 +61,10 @@ const makeXhrSetup = (buildUrl) => (xhr, requestUrl) => {
 };
 
 export default function VideoPlayer({ url, title }) {
-  const videoRef   = useRef(null);
-  const hlsRef     = useRef(null);
+  const videoRef        = useRef(null);
+  const hlsRef          = useRef(null);
   const loadingTimerRef = useRef(null);
+  const hasStartedRef   = useRef(false); // true setelah manifest parsed & video mulai play
 
   // proxyIdx: -1 = direct, 0..N = index ke PROXY_CHAIN
   const [proxyIdx,       setProxyIdx]       = useState(-1);
