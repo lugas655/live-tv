@@ -489,6 +489,7 @@ export default function VideoPlayer({ url, title }) {
       <video
         ref={videoRef}
         controls
+        autoPlay
         className={`w-full h-full object-contain ${(!url || error) ? 'opacity-0 absolute' : 'opacity-100 relative z-10'}`}
         style={{ maxHeight: 'calc(100vh - 4rem)' }}
         playsInline
