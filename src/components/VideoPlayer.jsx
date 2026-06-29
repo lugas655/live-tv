@@ -21,6 +21,13 @@ const PROXY_OPTIONS = [
     xhrSetup: (xhr, url) => {
       if (url.startsWith('http')) xhr.open('GET', `/proxy/${url}`, true);
     },
+    fetchSetup: (context, Request) => {
+      if (context.url.startsWith('http')) {
+        context.url = `/proxy/${context.url}`;
+      }
+      // Hls.js fetchSetup can return a Request object or let it use the mutated context.url
+      return new Request(context.url, typeof Request === 'object' ? Request : undefined);
+    }
   },
   {
     id: 'corsproxy',
@@ -30,6 +37,10 @@ const PROXY_OPTIONS = [
     xhrSetup: (xhr, url) => {
       if (url.startsWith('http')) xhr.open('GET', `https://corsproxy.io/?url=${encodeURIComponent(url)}`, true);
     },
+    fetchSetup: (context, Request) => {
+      if (context.url.startsWith('http')) context.url = `https://corsproxy.io/?url=${encodeURIComponent(context.url)}`;
+      return new Request(context.url, typeof Request === 'object' ? Request : undefined);
+    }
   },
   {
     id: 'allorigins',
@@ -39,6 +50,10 @@ const PROXY_OPTIONS = [
     xhrSetup: (xhr, url) => {
       if (url.startsWith('http')) xhr.open('GET', `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`, true);
     },
+    fetchSetup: (context, Request) => {
+      if (context.url.startsWith('http')) context.url = `https://api.allorigins.win/raw?url=${encodeURIComponent(context.url)}`;
+      return new Request(context.url, typeof Request === 'object' ? Request : undefined);
+    }
   },
 ];
 
@@ -62,7 +77,7 @@ export default function VideoPlayer({ url, title }) {
   const loadingTimerRef = useRef(null);
   const hasRecoveredNetworkErrorRef = useRef(false);
 
-  const [selectedProxy, setSelectedProxy] = useState(PROXY_OPTIONS[0]); // default: Direct
+  const [selectedProxy, setSelectedProxy] = useState(PROXY_OPTIONS[1]); // default: Proxy Server
   const [loading,        setLoading]       = useState(false);
   const [error,          setError]         = useState(null);
   const [isDash,         setIsDash]        = useState(false);
@@ -170,8 +185,8 @@ export default function VideoPlayer({ url, title }) {
           debug: false,
           enableWorker: true,
           lowLatencyMode: true,
-          enableFetch: false, // Wajib false agar xhrSetup kita dieksekusi (default hls.js v1+ pakai fetch)
           ...(proxy.xhrSetup && { xhrSetup: proxy.xhrSetup }),
+          ...(proxy.fetchSetup && { fetchSetup: proxy.fetchSetup }),
         };
 
         hls = new Hls(hlsConfig);
