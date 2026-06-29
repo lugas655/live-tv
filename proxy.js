@@ -69,7 +69,7 @@ app.use('/proxy', (req, res) => {
   };
 
   const proxyReq = protocol.request(rawTarget, options, (proxyRes) => {
-    // Header yang tidak diteruskan (bisa konflik dengan CORS yang kita set)
+    // Header yang tidak diteruskan (bisa konflik dengan CORS atau Caching yang kita set)
     const STRIP = [
       'set-cookie',
       'access-control-allow-origin',
@@ -78,6 +78,9 @@ app.use('/proxy', (req, res) => {
       'access-control-expose-headers',
       'x-frame-options',
       'content-security-policy',
+      'cache-control',
+      'expires',
+      'pragma'
     ];
 
     // Forward header dari sumber asli
@@ -97,6 +100,11 @@ app.use('/proxy', (req, res) => {
     res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', '*');
     res.setHeader('Access-Control-Expose-Headers', '*');
+
+    // MATIKAN CACHE BROWSER - Sangat penting untuk live stream HLS agar playlist selalu update!
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
 
     res.status(proxyRes.statusCode);
     proxyRes.pipe(res);
