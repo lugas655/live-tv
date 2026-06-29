@@ -1,0 +1,52 @@
+services:
+
+  # ── CORS Proxy Service ─────────────────────────────────────────────────────
+  proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile.proxy
+    container_name: live-proxy
+    restart: unless-stopped
+    environment:
+      - PORT=3001
+      - NODE_ENV=production
+    expose:
+      - "3001"           # Hanya terekspos ke network internal Docker
+    networks:
+      - live-network
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # ── React App + Nginx ──────────────────────────────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # Env saat build time (VITE_ vars di-embed ke dalam bundle JS)
+        VITE_M3U_URL: ${VITE_M3U_URL}
+        VITE_VPS_PROXY_URL: ${VITE_VPS_PROXY_URL:-}
+        VITE_CF_WORKER_URL: ${VITE_CF_WORKER_URL:-}
+    container_name: live-app
+    restart: unless-stopped
+    ports:
+      - "80:80"          # HTTP
+    depends_on:
+      proxy:
+        condition: service_healthy
+    networks:
+      - live-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+networks:
+  live-network:
+    driver: bridge

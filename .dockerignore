@@ -1,0 +1,14 @@
+node_modules
+dist
+.env.local
+android
+.gradle
+*.gradle
+build
+.git
+.gitignore
+*.md
+*.log
+npm-debug.log*
+.DS_Store
+Thumbs.db

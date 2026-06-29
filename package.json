@@ -1,0 +1,35 @@
+{
+  "name": "live-web",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "proxy": "node proxy.js"
+  },
+  "dependencies": {
+    "@tailwindcss/vite": "^4.3.1",
+    "cors": "^2.8.6",
+    "dashjs": "^5.2.0",
+    "express": "^5.2.1",
+    "hls.js": "^1.6.16",
+    "iptv-playlist-parser": "^0.15.2",
+    "lucide-react": "^1.20.0",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "eslint": "^10.3.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.2",
+    "globals": "^17.6.0",
+    "tailwindcss": "^4.3.1",
+    "vite": "^8.0.12"
+  }
+}

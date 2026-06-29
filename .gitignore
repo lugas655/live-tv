@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment variables (jangan di-commit ke git!)
+.env
+.env.local
+.env.production
+
+# Log files
+*.log
+npm-debug.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# Capacitor (tidak dipakai di project ini)
+android/
+ios/

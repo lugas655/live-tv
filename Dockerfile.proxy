@@ -1,0 +1,18 @@
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Install dependencies proxy
+COPY package*.json ./
+RUN npm ci --frozen-lockfile --omit=dev
+
+# Copy proxy server
+COPY proxy.js ./
+
+EXPOSE 3001
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+  CMD wget -qO- http://localhost:3001/health || exit 1
+
+CMD ["node", "proxy.js"]
