@@ -234,11 +234,12 @@ export default function VideoPlayer({ url, title }) {
           // Fatal network error
           hls.destroy(); hls = null; hlsRef.current = null;
 
-          if (hasStartedRef.current) {
-            // Video sudah pernah play → jangan ganti proxy, mungkin gangguan sementara
-            onFail('Tayangan terputus. Server mungkin gangguan sementara. Coba lagi.');
+          if (hasStartedRef.current && proxyIdx >= 0) {
+            // Sudah main via proxy tapi putus → mungkin server turun
+            onFail('Tayangan terputus. Server sedang gangguan. Coba lagi.');
           } else {
-            // Belum play sama sekali → coba proxy berikutnya
+            // Belum main ATAU sudah main tapi direct (CORS segment) → coba proxy berikutnya
+            console.log('[HLS] Switching ke proxy berikutnya...');
             tryNextProxy(`HLS ${data.type}`);
           }
         });
