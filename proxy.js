@@ -83,7 +83,12 @@ app.use('/proxy', (req, res) => {
     // Forward header dari sumber asli
     for (const [key, value] of Object.entries(proxyRes.headers)) {
       if (!STRIP.includes(key.toLowerCase())) {
-        res.setHeader(key, value);
+        // Tangkap redirect (301/302) dan pastikan browser redirect-nya lewat proxy lagi
+        if (key.toLowerCase() === 'location' && typeof value === 'string' && value.startsWith('http')) {
+          res.setHeader(key, `/proxy/${value}`);
+        } else {
+          res.setHeader(key, value);
+        }
       }
     }
 

@@ -170,6 +170,7 @@ export default function VideoPlayer({ url, title }) {
           debug: false,
           enableWorker: true,
           lowLatencyMode: true,
+          enableFetch: false, // Wajib false agar xhrSetup kita dieksekusi (default hls.js v1+ pakai fetch)
           ...(proxy.xhrSetup && { xhrSetup: proxy.xhrSetup }),
         };
 
