@@ -60,6 +60,7 @@ export default function VideoPlayer({ url, title }) {
   const videoRef        = useRef(null);
   const hlsRef          = useRef(null);
   const loadingTimerRef = useRef(null);
+  const hasRecoveredNetworkErrorRef = useRef(false);
 
   const [selectedProxy, setSelectedProxy] = useState(PROXY_OPTIONS[0]); // default: Direct
   const [loading,        setLoading]       = useState(false);
@@ -73,7 +74,6 @@ export default function VideoPlayer({ url, title }) {
   const [showQualityMenu, setShowQualityMenu] = useState(false);
   const [showProxyMenu,   setShowProxyMenu]   = useState(false);
 
-  // Reset saat saluran berubah
   useEffect(() => {
     setError(null);
     setLevels([]);
@@ -81,6 +81,7 @@ export default function VideoPlayer({ url, title }) {
     setShowQualityMenu(false);
     setShowProxyMenu(false);
     setRetryKey(0);
+    hasRecoveredNetworkErrorRef.current = false;
   }, [url]);
 
   // ── Handlers ─────────────────────────────────────────────────────────────
@@ -193,6 +194,17 @@ export default function VideoPlayer({ url, title }) {
           if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
             hls.recoverMediaError();
             return;
+          }
+
+          if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+             if (!hasRecoveredNetworkErrorRef.current) {
+                 console.warn('[HLS] Fatal Network Error — mencoba startLoad()...');
+                 hasRecoveredNetworkErrorRef.current = true;
+                 hls.startLoad();
+                 return;
+             }
+             // Jika masih gagal walau sudah dicoba recover
+             console.error('[HLS] Fatal Network Error tidak bisa di-recover.');
           }
 
           hls.destroy(); hls = null; hlsRef.current = null;
